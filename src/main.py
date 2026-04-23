@@ -106,8 +106,8 @@ def list_projects(
         "project",
         {"page": page, **params},
         tuskr_client.RequestMethod.GET,
-        ext_account_id=ctx.get_state("ext_account_id"),
-        ext_access_token=ctx.get_state("ext_access_token"),
+        ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 

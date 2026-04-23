@@ -32,11 +32,21 @@ class UserTokenHandler(Middleware):
         return result
 
     def retrieve_and_apply_token(self, context: MiddlewareContext):
-        # get request to reade headers
-        request = context.fastmcp_context.request_context.request
+        """
+        In stdio mode there is no HTTP request/headers, so fall back to None
+        and let the tool functions fall back to env vars instead
+        """
+        try:
+            request = context.fastmcp_context.request_context.request
+            headers = request.headers
+        except Exception:
+            logger.info("No HTTP request context (stdio mode), skipping header extraction")
+            context.fastmcp_context.set_state("ext_access_token", None)
+            context.fastmcp_context.set_state("ext_account_id", None)
+            return
 
         # Read access token
-        auth_header = request.headers.get("Authorization")
+        auth_header = headers.get("Authorization")
         token = None
 
         if auth_header:
@@ -53,12 +63,11 @@ class UserTokenHandler(Middleware):
         # Try to retrieve account id.
         # It is optional, because account id can be set through env variable
         # in organization on the deployment
-        account_header = request.headers.get("Account-ID")
+        account_header = headers.get("Account-ID")
         account_id = None
 
         if account_header:
             account_id = account_header.strip()
-
             logger.info(f"Got account id: {account_id}")
         else:
             logger.info("Account id is not defined")

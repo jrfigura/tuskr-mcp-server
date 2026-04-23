@@ -155,9 +155,8 @@ def list_test_runs(
             "test-run",
             {"page": page, **params},
             tuskr_client.RequestMethod.GET,
-            ext_account_id=ctx.get_state("ext_account_id"),
-            ext_access_token=ctx.get_state("ext_access_token"),
-        )
+            ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
+            ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),        )
 
     # Fetch all pages and filter for incomplete runs client-side,
     # returning a trimmed payload to stay under MCP transport size limits.
@@ -231,8 +230,8 @@ def create_test_run(
             "assignedTo": assigned_to,
         },
         tuskr_client.ReuqestMethod.POST,
-        ext_account_id=ctx.get_state("ext_account_id"),
-        ext_access_token=ctx.get_state("ext_access_token"),
+        ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 

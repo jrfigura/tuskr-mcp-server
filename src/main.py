@@ -110,6 +110,7 @@ def list_test_runs(
     filter_key: str = None,
     filter_status: str = None,
     filter_assigned_to: str = None,
+    filter_incomplete: bool = False,
     page: int = 1,
 ):
     """
@@ -118,11 +119,17 @@ def list_test_runs(
     Args:
         filter_project: specifies the project ID to filter the test runs associated with a particular project
         filter_name: to filter test runs with name containing the specified value
-        fller_key: to filter test runs with key containing the specified value
+        filter_key: to filter test runs with key containing the specified value
         filter_status: to filter test runs by their status. Two supported values 'active' or 'archived'
         filter_assigned_to: id of the user to whom test runs are assigned
+        filter_incomplete: if True, fetches all pages and returns only test runs that are not 100% complete,
+            with a trimmed payload (id, key, name, percentDone, counts, assignee, deadline, status).
+            When False (default), returns the raw paginated response from the Tuskr API.
         page: controls number of records in output, every page contains 100 records. Default is 1.
+            Ignored when filter_incomplete is True.
     """
+    import json
+
     params = {"filter[project]": filter_project}
 
     if filter_name:
@@ -134,13 +141,49 @@ def list_test_runs(
     if filter_assigned_to:
         params["filter[assignedTo]"] = filter_assigned_to
 
-    return tuskr_client.send(
-        "test-run",
-        {"page": page, **params},
-        tuskr_client.RequestMethod.GET,
-        ext_account_id=ctx.get_state("ext_account_id"),
-        ext_access_token=ctx.get_state("ext_access_token"),
-    )
+    if not filter_incomplete:
+        return tuskr_client.send(
+            "test-run",
+            {"page": page, **params},
+            tuskr_client.RequestMethod.GET,
+            ext_account_id=ctx.get_state("ext_account_id"),
+            ext_access_token=ctx.get_state("ext_access_token"),
+        )
+
+    # Fetch all pages and filter for incomplete runs client-side,
+    # returning a trimmed payload to stay under MCP transport size limits.
+    incomplete = []
+    current_page = 1
+    while True:
+        raw = tuskr_client.send(
+            "test-run",
+            {"page": current_page, **params},
+            tuskr_client.RequestMethod.GET,
+            ext_account_id=ctx.get_state("ext_account_id"),
+            ext_access_token=ctx.get_state("ext_access_token"),
+        )
+        data = json.loads(raw)
+        rows = data.get("rows", [])
+        for run in rows:
+            percent = run.get("percentDone", 100)
+            if percent < 100:
+                incomplete.append({
+                    "id": run.get("id"),
+                    "key": run.get("key"),
+                    "name": run.get("name"),
+                    "percentDone": percent,
+                    "totalTestCaseCount": run.get("totalTestCaseCount", 0),
+                    "doneTestCaseCount": run.get("doneTestCaseCount", 0),
+                    "assignedTo": run.get("assignedTo"),
+                    "deadline": run.get("deadline"),
+                    "status": run.get("status"),
+                })
+        meta = data.get("meta", {})
+        if current_page >= meta.get("pages", 1):
+            break
+        current_page += 1
+
+    return json.dumps({"rows": incomplete, "count": len(incomplete)})
 
 
 @mcp.tool

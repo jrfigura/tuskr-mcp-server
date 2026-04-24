@@ -35,7 +35,14 @@ def send(
     headers = {"Authorization": f"Bearer {access_token}"}
 
     if method == RequestMethod.POST:
-        response = requests.post(url, headers=headers, data=body)
+        # Tuskr's REST API expects POST bodies as JSON wrapped in a top-level
+        # "data" key (see https://tuskr.app/kb/latest/api). Setting the
+        # Content-Type header and using requests' json= keyword handles both.
+        response = requests.post(
+            url,
+            headers={**headers, "Content-Type": "application/json"},
+            json={"data": body},
+        )
     else:
         response = requests.get(url, headers=headers, params=body)
 

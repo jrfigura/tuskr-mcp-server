@@ -9,6 +9,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 import tuskr_client
 
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -237,7 +238,7 @@ def create_test_run(
             "deadline": deadline,
             "assignedTo": assigned_to,
         },
-        tuskr_client.ReuqestMethod.POST,
+        tuskr_client.RequestMethod.POST,
         ext_account_id=ctx.get_state("ext_account_id")
         or os.environ.get("TUSKR_ACCOUNT_ID"),
         ext_access_token=ctx.get_state("ext_access_token")

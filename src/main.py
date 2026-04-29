@@ -9,7 +9,6 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 import tuskr_client
 
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -83,10 +82,10 @@ mcp.add_middleware(UserTokenHandler())
 
 @mcp.tool
 def list_projects(
-    ctx: Context,
-    filter_name: str = None,
-    filter_status: str = None,
-    page: int = 1,
+        ctx: Context,
+        filter_name: str = None,
+        filter_status: str = None,
+        page: int = 1,
 ):
     """
     Retrives list of projects based on various filter criteria.
@@ -113,14 +112,14 @@ def list_projects(
 
 @mcp.tool
 def list_test_runs(
-    ctx: Context,
-    filter_project,
-    filter_name: str = None,
-    filter_key: str = None,
-    filter_status: str = None,
-    filter_assigned_to: str = None,
-    filter_incomplete: bool = False,
-    page: int = 1,
+        ctx: Context,
+        filter_project,
+        filter_name: str = None,
+        filter_key: str = None,
+        filter_status: str = None,
+        filter_assigned_to: str = None,
+        filter_incomplete: bool = False,
+        page: int = 1,
 ):
     """
     Retrieves list of test runs of a project with support for various filters.
@@ -156,7 +155,7 @@ def list_test_runs(
             {"page": page, **params},
             tuskr_client.RequestMethod.GET,
             ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
-            ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),        )
+            ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"), )
 
     # Fetch all pages and filter for incomplete runs client-side,
     # returning a trimmed payload to stay under MCP transport size limits.
@@ -196,14 +195,14 @@ def list_test_runs(
 
 @mcp.tool
 def create_test_run(
-    ctx: Context,
-    name: str,
-    project: str,
-    test_case_inclusion_type: str,
-    test_cases: List[str] = None,
-    description: str = "",
-    deadline: str = "",
-    assigned_to: str = "",
+        ctx: Context,
+        name: str,
+        project: str,
+        test_case_inclusion_type: str,
+        test_cases: List[str] = None,
+        description: str = "",
+        deadline: str = "",
+        assigned_to: str = "",
 ):
     """
     Creates a new test run in a project.

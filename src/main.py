@@ -39,7 +39,9 @@ class UserTokenHandler(Middleware):
             request = context.fastmcp_context.request_context.request
             headers = request.headers
         except Exception:
-            logger.info("No HTTP request context (stdio mode), skipping header extraction")
+            logger.info(
+                "No HTTP request context (stdio mode), skipping header extraction"
+            )
             context.fastmcp_context.set_state("ext_access_token", None)
             context.fastmcp_context.set_state("ext_account_id", None)
             return
@@ -82,10 +84,10 @@ mcp.add_middleware(UserTokenHandler())
 
 @mcp.tool
 def list_projects(
-        ctx: Context,
-        filter_name: str = None,
-        filter_status: str = None,
-        page: int = 1,
+    ctx: Context,
+    filter_name: str = None,
+    filter_status: str = None,
+    page: int = 1,
 ):
     """
     Retrives list of projects based on various filter criteria.
@@ -105,21 +107,23 @@ def list_projects(
         "project",
         {"page": page, **params},
         tuskr_client.RequestMethod.GET,
-        ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
-        ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),
+        ext_account_id=ctx.get_state("ext_account_id")
+        or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token")
+        or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 
 @mcp.tool
 def list_test_runs(
-        ctx: Context,
-        filter_project,
-        filter_name: str = None,
-        filter_key: str = None,
-        filter_status: str = None,
-        filter_assigned_to: str = None,
-        filter_incomplete: bool = False,
-        page: int = 1,
+    ctx: Context,
+    filter_project,
+    filter_name: str = None,
+    filter_key: str = None,
+    filter_status: str = None,
+    filter_assigned_to: str = None,
+    filter_incomplete: bool = False,
+    page: int = 1,
 ):
     """
     Retrieves list of test runs of a project with support for various filters.
@@ -154,8 +158,11 @@ def list_test_runs(
             "test-run",
             {"page": page, **params},
             tuskr_client.RequestMethod.GET,
-            ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
-            ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"), )
+            ext_account_id=ctx.get_state("ext_account_id")
+            or os.environ.get("TUSKR_ACCOUNT_ID"),
+            ext_access_token=ctx.get_state("ext_access_token")
+            or os.environ.get("TUSKR_ACCESS_TOKEN"),
+        )
 
     # Fetch all pages and filter for incomplete runs client-side,
     # returning a trimmed payload to stay under MCP transport size limits.
@@ -174,17 +181,19 @@ def list_test_runs(
         for run in rows:
             percent = run.get("percentDone", 100)
             if percent < 100:
-                incomplete.append({
-                    "id": run.get("id"),
-                    "key": run.get("key"),
-                    "name": run.get("name"),
-                    "percentDone": percent,
-                    "totalTestCaseCount": run.get("totalTestCaseCount", 0),
-                    "doneTestCaseCount": run.get("doneTestCaseCount", 0),
-                    "assignedTo": run.get("assignedTo"),
-                    "deadline": run.get("deadline"),
-                    "status": run.get("status"),
-                })
+                incomplete.append(
+                    {
+                        "id": run.get("id"),
+                        "key": run.get("key"),
+                        "name": run.get("name"),
+                        "percentDone": percent,
+                        "totalTestCaseCount": run.get("totalTestCaseCount", 0),
+                        "doneTestCaseCount": run.get("doneTestCaseCount", 0),
+                        "assignedTo": run.get("assignedTo"),
+                        "deadline": run.get("deadline"),
+                        "status": run.get("status"),
+                    }
+                )
         meta = data.get("meta", {})
         if current_page >= meta.get("pages", 1):
             break
@@ -195,14 +204,14 @@ def list_test_runs(
 
 @mcp.tool
 def create_test_run(
-        ctx: Context,
-        name: str,
-        project: str,
-        test_case_inclusion_type: str,
-        test_cases: List[str] = None,
-        description: str = "",
-        deadline: str = "",
-        assigned_to: str = "",
+    ctx: Context,
+    name: str,
+    project: str,
+    test_case_inclusion_type: str,
+    test_cases: List[str] = None,
+    description: str = "",
+    deadline: str = "",
+    assigned_to: str = "",
 ):
     """
     Creates a new test run in a project.
@@ -229,8 +238,10 @@ def create_test_run(
             "assignedTo": assigned_to,
         },
         tuskr_client.ReuqestMethod.POST,
-        ext_account_id=ctx.get_state("ext_account_id") or os.environ.get("TUSKR_ACCOUNT_ID"),
-        ext_access_token=ctx.get_state("ext_access_token") or os.environ.get("TUSKR_ACCESS_TOKEN"),
+        ext_account_id=ctx.get_state("ext_account_id")
+        or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token")
+        or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 

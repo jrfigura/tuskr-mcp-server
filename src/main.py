@@ -9,7 +9,6 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 import tuskr_client
 
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -32,11 +31,23 @@ class UserTokenHandler(Middleware):
         return result
 
     def retrieve_and_apply_token(self, context: MiddlewareContext):
-        # get request to reade headers
-        request = context.fastmcp_context.request_context.request
+        """
+        In stdio mode there is no HTTP request/headers, so fall back to None
+        and let the tool functions fall back to env vars instead
+        """
+        try:
+            request = context.fastmcp_context.request_context.request
+            headers = request.headers
+        except Exception:
+            logger.info(
+                "No HTTP request context (stdio mode), skipping header extraction"
+            )
+            context.fastmcp_context.set_state("ext_access_token", None)
+            context.fastmcp_context.set_state("ext_account_id", None)
+            return
 
         # Read access token
-        auth_header = request.headers.get("Authorization")
+        auth_header = headers.get("Authorization")
         token = None
 
         if auth_header:
@@ -53,12 +64,11 @@ class UserTokenHandler(Middleware):
         # Try to retrieve account id.
         # It is optional, because account id can be set through env variable
         # in organization on the deployment
-        account_header = request.headers.get("Account-ID")
+        account_header = headers.get("Account-ID")
         account_id = None
 
         if account_header:
             account_id = account_header.strip()
-
             logger.info(f"Got account id: {account_id}")
         else:
             logger.info("Account id is not defined")
@@ -97,8 +107,10 @@ def list_projects(
         "project",
         {"page": page, **params},
         tuskr_client.RequestMethod.GET,
-        ext_account_id=ctx.get_state("ext_account_id"),
-        ext_access_token=ctx.get_state("ext_access_token"),
+        ext_account_id=ctx.get_state("ext_account_id")
+        or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token")
+        or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 
@@ -146,8 +158,10 @@ def list_test_runs(
             "test-run",
             {"page": page, **params},
             tuskr_client.RequestMethod.GET,
-            ext_account_id=ctx.get_state("ext_account_id"),
-            ext_access_token=ctx.get_state("ext_access_token"),
+            ext_account_id=ctx.get_state("ext_account_id")
+            or os.environ.get("TUSKR_ACCOUNT_ID"),
+            ext_access_token=ctx.get_state("ext_access_token")
+            or os.environ.get("TUSKR_ACCESS_TOKEN"),
         )
 
     # Fetch all pages and filter for incomplete runs client-side,
@@ -167,17 +181,19 @@ def list_test_runs(
         for run in rows:
             percent = run.get("percentDone", 100)
             if percent < 100:
-                incomplete.append({
-                    "id": run.get("id"),
-                    "key": run.get("key"),
-                    "name": run.get("name"),
-                    "percentDone": percent,
-                    "totalTestCaseCount": run.get("totalTestCaseCount", 0),
-                    "doneTestCaseCount": run.get("doneTestCaseCount", 0),
-                    "assignedTo": run.get("assignedTo"),
-                    "deadline": run.get("deadline"),
-                    "status": run.get("status"),
-                })
+                incomplete.append(
+                    {
+                        "id": run.get("id"),
+                        "key": run.get("key"),
+                        "name": run.get("name"),
+                        "percentDone": percent,
+                        "totalTestCaseCount": run.get("totalTestCaseCount", 0),
+                        "doneTestCaseCount": run.get("doneTestCaseCount", 0),
+                        "assignedTo": run.get("assignedTo"),
+                        "deadline": run.get("deadline"),
+                        "status": run.get("status"),
+                    }
+                )
         meta = data.get("meta", {})
         if current_page >= meta.get("pages", 1):
             break
@@ -222,8 +238,10 @@ def create_test_run(
             "assignedTo": assigned_to,
         },
         tuskr_client.ReuqestMethod.POST,
-        ext_account_id=ctx.get_state("ext_account_id"),
-        ext_access_token=ctx.get_state("ext_access_token"),
+        ext_account_id=ctx.get_state("ext_account_id")
+        or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=ctx.get_state("ext_access_token")
+        or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 

@@ -41,8 +41,11 @@ class TestSend:
         assert result == "executed"
         requests.post.assert_called_once_with(
             f"{expected_base_url}/create_report",
-            headers={"Authorization": f"Bearer {access_token}"},
-            data="some body",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={"data": "some body"},
         )
 
     def test_get(self, mocker, mock_envs):

@@ -1,5 +1,6 @@
 import logging
 import os
+import warnings
 import click
 
 from typing import List
@@ -44,7 +45,7 @@ class UserTokenHandler(Middleware):
                 "No HTTP request context (stdio mode), skipping header extraction"
             )
             context.fastmcp_context.set_state("ext_access_token", None)
-            context.fastmcp_context.set_state("ext_account_id", None)
+            context.fastmcp_context.set_state("ext_tenant_id", None)
             return
 
         # Read access token
@@ -62,19 +63,31 @@ class UserTokenHandler(Middleware):
 
         context.fastmcp_context.set_state("ext_access_token", token)
 
-        # Try to retrieve account id.
-        # It is optional, because account id can be set through env variable
-        # in organization on the deployment
-        account_header = headers.get("Account-ID")
-        account_id = None
-
-        if account_header:
-            account_id = account_header.strip()
-            logger.info(f"Got account id: {account_id}")
+        # Try to retrieve tenant id from headers; prefer the new Tenant-ID header
+        # and fall back to the legacy Account-ID header with a deprecation warning.
+        # Tenant id is optional — it can be set via TUSKR_TENANT_ID env var instead.
+        tenant_id = None
+        tenant_header = headers.get("Tenant-ID")
+        if tenant_header:
+            tenant_id = tenant_header.strip()
+            logger.info(f"Got tenant id: {tenant_id}")
         else:
-            logger.info("Account id is not defined")
+            legacy_header = headers.get("Account-ID")
+            if legacy_header:
+                warnings.warn(
+                    "The 'Account-ID' HTTP header is deprecated; "
+                    "use 'Tenant-ID' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                tenant_id = legacy_header.strip()
+                logger.info(
+                    f"Got tenant id (via deprecated Account-ID header): {tenant_id}"
+                )
+            else:
+                logger.info("Tenant id is not defined")
 
-        context.fastmcp_context.set_state("ext_account_id", account_id)
+        context.fastmcp_context.set_state("ext_tenant_id", tenant_id)
 
 
 mcp = FastMCP(
@@ -84,7 +97,7 @@ mcp.add_middleware(UserTokenHandler())
 
 
 @mcp.tool
-def list_projects(
+async def list_projects(
     ctx: Context,
     filter_name: str = None,
     filter_status: str = None,
@@ -108,15 +121,16 @@ def list_projects(
         "project",
         {"page": page, **params},
         tuskr_client.RequestMethod.GET,
-        ext_account_id=ctx.get_state("ext_account_id")
+        ext_tenant_id=(await ctx.get_state("ext_tenant_id"))
+        or os.environ.get("TUSKR_TENANT_ID")
         or os.environ.get("TUSKR_ACCOUNT_ID"),
-        ext_access_token=ctx.get_state("ext_access_token")
+        ext_access_token=(await ctx.get_state("ext_access_token"))
         or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 
 
 @mcp.tool
-def list_test_runs(
+async def list_test_runs(
     ctx: Context,
     filter_project,
     filter_name: str = None,
@@ -154,15 +168,23 @@ def list_test_runs(
     if filter_assigned_to:
         params["filter[assignedTo]"] = filter_assigned_to
 
+    # Resolve credentials once up front so we don't re-await on every page.
+    tenant_id = (
+        (await ctx.get_state("ext_tenant_id"))
+        or os.environ.get("TUSKR_TENANT_ID")
+        or os.environ.get("TUSKR_ACCOUNT_ID")
+    )
+    access_token = (await ctx.get_state("ext_access_token")) or os.environ.get(
+        "TUSKR_ACCESS_TOKEN"
+    )
+
     if not filter_incomplete:
         return tuskr_client.send(
             "test-run",
             {"page": page, **params},
             tuskr_client.RequestMethod.GET,
-            ext_account_id=ctx.get_state("ext_account_id")
-            or os.environ.get("TUSKR_ACCOUNT_ID"),
-            ext_access_token=ctx.get_state("ext_access_token")
-            or os.environ.get("TUSKR_ACCESS_TOKEN"),
+            ext_tenant_id=tenant_id,
+            ext_access_token=access_token,
         )
 
     # Fetch all pages and filter for incomplete runs client-side,
@@ -174,8 +196,8 @@ def list_test_runs(
             "test-run",
             {"page": current_page, **params},
             tuskr_client.RequestMethod.GET,
-            ext_account_id=ctx.get_state("ext_account_id"),
-            ext_access_token=ctx.get_state("ext_access_token"),
+            ext_tenant_id=tenant_id,
+            ext_access_token=access_token,
         )
         data = json.loads(raw)
         rows = data.get("rows", [])
@@ -204,7 +226,7 @@ def list_test_runs(
 
 
 @mcp.tool
-def create_test_run(
+async def create_test_run(
     ctx: Context,
     name: str,
     project: str,
@@ -239,9 +261,10 @@ def create_test_run(
             "assignedTo": assigned_to,
         },
         tuskr_client.RequestMethod.POST,
-        ext_account_id=ctx.get_state("ext_account_id")
+        ext_tenant_id=(await ctx.get_state("ext_tenant_id"))
+        or os.environ.get("TUSKR_TENANT_ID")
         or os.environ.get("TUSKR_ACCOUNT_ID"),
-        ext_access_token=ctx.get_state("ext_access_token")
+        ext_access_token=(await ctx.get_state("ext_access_token"))
         or os.environ.get("TUSKR_ACCESS_TOKEN"),
     )
 

@@ -1,4 +1,5 @@
 import os
+import warnings
 
 from enum import StrEnum
 
@@ -15,19 +16,70 @@ class RequestMethod(StrEnum):
 
 TUSKR_BASE_URL = "https://api.tuskr.live/api/tenant/"
 
+_TENANT_DEPRECATION_MESSAGE = (
+    "TUSKR_ACCOUNT_ID is deprecated and will be removed in a future "
+    "release; use TUSKR_TENANT_ID instead."
+)
+
+
+def _resolve_tenant_id(ext_tenant_id: str | None = None) -> str | None:
+    """Return the tenant ID, preferring the new TUSKR_TENANT_ID env var.
+
+    Resolution order:
+    1. Explicit ext_tenant_id argument (typically from HTTP header).
+    2. TUSKR_TENANT_ID environment variable.
+    3. TUSKR_ACCOUNT_ID environment variable (deprecated; warns).
+    """
+    if ext_tenant_id is not None:
+        return ext_tenant_id
+
+    new = os.environ.get("TUSKR_TENANT_ID")
+    if new:
+        return new
+
+    old = os.environ.get("TUSKR_ACCOUNT_ID")
+    if old:
+        warnings.warn(
+            _TENANT_DEPRECATION_MESSAGE,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return old
+
+    return None
+
 
 def send(
     action: str,
     body: str,
     method: RequestMethod,
-    ext_account_id: str = None,
+    ext_tenant_id: str | None = None,
     ext_access_token: str = None,
+    *,
+    ext_account_id: str | None = None,  # deprecated alias; remove in next major version
 ):
     """Sends a request to the Tuskr endpoint"""
 
+    if ext_account_id is not None and ext_tenant_id is None:
+        warnings.warn(
+            "The 'ext_account_id' parameter is deprecated; "
+            "use 'ext_tenant_id' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        ext_tenant_id = ext_account_id
+
+    tenant_id = _resolve_tenant_id(ext_tenant_id)
+    if tenant_id is None:
+        raise ValueError(
+            "Tuskr tenant ID is not set. Provide TUSKR_TENANT_ID via "
+            "environment, the Tenant-ID HTTP header, or the "
+            "ext_tenant_id argument."
+        )
+
     url = urljoin(
         os.environ.get("TUSKR_BASE_URL", TUSKR_BASE_URL),
-        os.environ.get("TUSKR_ACCOUNT_ID", ext_account_id) + f"/{action}",
+        tenant_id + f"/{action}",
     )
 
     access_token = os.environ.get("TUSKR_ACCESS_TOKEN", ext_access_token)

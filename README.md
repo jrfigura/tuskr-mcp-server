@@ -14,7 +14,7 @@ Set up environment variables or configure the `.env` file using the `.env.exampl
 The following environment variables are supported:
 
 ```
-TUSKR_ACCOUNT_ID=<your account id>
+TUSKR_TENANT_ID=<your tenant id>
 TUSKR_ACCESS_TOKEN=<your access token>
 ```
 (this doc desc https://tuskr.app/kb/latest/api)
@@ -56,7 +56,7 @@ Use the following template to connect the server via HTTP:
       "url": "http://<your-mcp-dns-or-ip>/mcp/",
       "headers": {
         "Authorization": "Bearer <your access token>",
-        "Account-ID": "<your-tuskr-account-id>"
+        "Tenant-ID": "<your-tuskr-tenant-id>"
       }
     }
   }
@@ -65,7 +65,19 @@ Use the following template to connect the server via HTTP:
 
 The `Authorization` is mandatory.
 
-The `Account-ID` is not required and can be set on the server side using the `TUSKR_ACCOUNT_ID` env variable. It's convenient in case you have single MCP Server for organization.
+The `Tenant-ID` is not required and can be set on the server side using the `TUSKR_TENANT_ID` env variable. It's convenient in case you have a single MCP Server for your organization.
+
+### Migrating from TUSKR_ACCOUNT_ID
+
+Earlier versions of this server used the env var `TUSKR_ACCOUNT_ID` and the HTTP header
+`Account-ID`. These continue to work, but emit a deprecation warning. Tuskr's own
+documentation and UI consistently use the term "Tenant ID" (it is part of the REST URL
+path: `/api/tenant/<tenant-id>/`), so the preferred names are now `TUSKR_TENANT_ID` and
+the `Tenant-ID` HTTP header. Both names will be supported until a future major version
+removes the legacy names.
+
+To migrate an existing config, replace `TUSKR_ACCOUNT_ID` with `TUSKR_TENANT_ID`; no
+other changes are required.
 
 ### stdio Transport (for local development)
 

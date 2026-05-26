@@ -107,16 +107,17 @@ class TestTenantIdResolution:
         tuskr_client.send("action", {}, tuskr_client.RequestMethod.GET)
         url = requests.get.call_args[0][0]
         assert "tenant-new" in url
-        assert not any(
-            issubclass(w.category, DeprecationWarning) for w in recwarn.list
-        )
+        assert not any(issubclass(w.category, DeprecationWarning) for w in recwarn.list)
 
     def test_ext_tenant_id_beats_env_vars(self, monkeypatch, mocker):
         """Caller-supplied ext_tenant_id beats env vars (fixes precedence bug)."""
         monkeypatch.setenv("TUSKR_TENANT_ID", "tenant-from-env")
         self._mock_get(mocker, monkeypatch)
         tuskr_client.send(
-            "action", {}, tuskr_client.RequestMethod.GET, ext_tenant_id="tenant-from-arg"
+            "action",
+            {},
+            tuskr_client.RequestMethod.GET,
+            ext_tenant_id="tenant-from-arg",
         )
         url = requests.get.call_args[0][0]
         assert "tenant-from-arg" in url

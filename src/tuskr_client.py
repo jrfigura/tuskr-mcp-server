@@ -1,12 +1,9 @@
 import os
 import warnings
-
 from enum import StrEnum
+from urllib.parse import urljoin
 
 import requests
-
-
-from urllib.parse import urljoin
 
 
 class RequestMethod(StrEnum):
@@ -54,7 +51,7 @@ def send(
     body: str,
     method: RequestMethod,
     ext_tenant_id: str | None = None,
-    ext_access_token: str = None,
+    ext_access_token: str | None = None,
     *,
     ext_account_id: str | None = None,  # deprecated alias; remove in next major version
 ):

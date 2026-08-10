@@ -1,15 +1,12 @@
 import logging
 import os
 import warnings
+
 import click
-
-from typing import List
-from fastmcp import FastMCP, Context
-
+from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 import tuskr_client
-
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -40,7 +37,9 @@ class UserTokenHandler(Middleware):
         try:
             request = context.fastmcp_context.request_context.request
             headers = request.headers
-        except Exception:
+        # Broad by design: fastmcp raises different errors depending on which
+        # part of the request context is missing in stdio mode.
+        except Exception:  # noqa: BLE001
             logger.info(
                 "No HTTP request context (stdio mode), skipping header extraction"
             )
@@ -52,14 +51,13 @@ class UserTokenHandler(Middleware):
         auth_header = headers.get("Authorization")
         token = None
 
-        if auth_header:
-            if auth_header.startswith("Bearer "):
-                token = auth_header.split(" ", 1)[1].strip()
-                if not token:
-                    raise ValueError(
-                        "Unauthorized: Empty Bearer token",
-                    )
-                logger.info(f"Got Bearer token: {token}")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if not token:
+                raise ValueError(
+                    "Unauthorized: Empty Bearer token",
+                )
+            logger.info(f"Got Bearer token: {token}")
 
         context.fastmcp_context.set_state("ext_access_token", token)
 
@@ -99,8 +97,8 @@ mcp.add_middleware(UserTokenHandler())
 @mcp.tool
 async def list_projects(
     ctx: Context,
-    filter_name: str = None,
-    filter_status: str = None,
+    filter_name: str | None = None,
+    filter_status: str | None = None,
     page: int = 1,
 ):
     """
@@ -133,10 +131,10 @@ async def list_projects(
 async def list_test_runs(
     ctx: Context,
     filter_project,
-    filter_name: str = None,
-    filter_key: str = None,
-    filter_status: str = None,
-    filter_assigned_to: str = None,
+    filter_name: str | None = None,
+    filter_key: str | None = None,
+    filter_status: str | None = None,
+    filter_assigned_to: str | None = None,
     filter_incomplete: bool = False,
     page: int = 1,
 ):
@@ -231,7 +229,7 @@ async def create_test_run(
     name: str,
     project: str,
     test_case_inclusion_type: str,
-    test_cases: List[str] = None,
+    test_cases: list[str] | None = None,
     description: str = "",
     deadline: str = "",
     assigned_to: str = "",
@@ -269,6 +267,74 @@ async def create_test_run(
     )
 
 
+@mcp.tool
+async def add_test_run_results(
+    ctx: Context,
+    test_run: str,
+    status: str,
+    test_cases: str | list[str],
+    assigned_to: str | None = None,
+    comments: str | None = None,
+    time_spent_in_minutes: int | None = None,
+    custom_fields: dict | None = None,
+):
+    """
+    Records a result against one or more test cases in a test run.
+
+    Tuskr exposes a single bulk endpoint for results, so one call applies the
+    same status to every test case listed. Pass a single test case to record
+    one result, or a list to record many in one request. Always prefer one
+    call with a list over repeated single calls: Tuskr rate-limits every plan
+    at 10 requests/second.
+
+    Args:
+        test_run: ID or name of the test run
+        status: result status key, e.g. 'PASSED', 'FAILED', 'RETEST'. Status
+            keys are configured per tenant, so use the keys defined in your
+            own Tuskr account.
+        test_cases: a single test case ID, key or name, or a list of them.
+            The status is applied to every test case listed.
+        assigned_to: ID, name or email of the user. If present, the test cases
+            in this test run will be assigned to this user.
+        comments: free-text comment stored on every result created by this call
+        time_spent_in_minutes: execution time recorded against every result
+        custom_fields: JSON object mapping custom field keys to their values
+    """
+    if isinstance(test_cases, str):
+        test_cases = [test_cases]
+
+    if not test_cases:
+        raise ValueError("test_cases must contain at least one test case")
+
+    body = {
+        "testRun": test_run,
+        "status": status,
+        "testCases": test_cases,
+    }
+
+    # Only send optional keys the caller actually set. Tuskr resolves
+    # assignedTo against real users, so a blank value is an error, not a no-op.
+    if assigned_to:
+        body["assignedTo"] = assigned_to
+    if comments:
+        body["comments"] = comments
+    if time_spent_in_minutes is not None:
+        body["timeSpentInMinutes"] = time_spent_in_minutes
+    if custom_fields:
+        body["customFields"] = custom_fields
+
+    return tuskr_client.send(
+        "test-run-result/bulk",
+        body,
+        tuskr_client.RequestMethod.POST,
+        ext_tenant_id=(await ctx.get_state("ext_tenant_id"))
+        or os.environ.get("TUSKR_TENANT_ID")
+        or os.environ.get("TUSKR_ACCOUNT_ID"),
+        ext_access_token=(await ctx.get_state("ext_access_token"))
+        or os.environ.get("TUSKR_ACCESS_TOKEN"),
+    )
+
+
 @mcp.resource("resource://service_description")
 def service_description():
     return """This MCP service provides tools to manage projects, test cases, tests suits
@@ -278,7 +344,7 @@ def service_description():
 @click.command()
 @click.option("--transport", type=str, default=os.environ.get("MCP_TRANSPORT", "http"))
 @click.option("--host", type=str, default=os.environ.get("MCP_HOST", "0.0.0.0"))
-@click.option("--port", type=int, default=os.environ.get("MCP_PORT", 8000))
+@click.option("--port", type=int, default=os.environ.get("MCP_PORT", "8000"))
 def main(transport, host, port):
     run_params = {}
     if transport == "http":

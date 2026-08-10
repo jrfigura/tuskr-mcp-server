@@ -1,10 +1,10 @@
 import os
+from urllib.parse import urljoin
+
 import pytest
 import requests
 
-import src.tuskr_client as tuskr_client
-
-from urllib.parse import urljoin
+from src import tuskr_client
 
 
 class TestSend:

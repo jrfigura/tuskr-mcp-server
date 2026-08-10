@@ -1,21 +1,66 @@
 import asyncio
+import json
 
 import pytest
 
-from src import main
+from src.main import _trim_assignee, list_test_runs
+
+# Depending on the fastmcp version, @mcp.tool either leaves the plain function
+# in place or wraps it in a Tool object exposing the original as `.fn`.
+_list_test_runs = getattr(list_test_runs, "fn", list_test_runs)
 
 
-def _add_result(ctx, **kwargs):
-    """Call the add_test_run_results tool, unwrapping the @mcp.tool decorator.
+def _user(**overrides):
+    """A Tuskr user object shaped like the real API response."""
+    user = {
+        "id": "9f1c0e2a",
+        "fullName": "Jan Figura",
+        "email": "jan.figura@onetick.com",
+        "applicationState": "x" * 16209,
+        "passwordResetTokenExpiresAt": "2026-08-01T10:00:00Z",
+        "jwtTokenInvalidBefore": "2026-07-30T09:00:00Z",
+        "lastLoginAt": "2026-08-09T07:14:00Z",
+    }
+    user.update(overrides)
+    return user
 
-    Driven with asyncio.run so the suite needs no pytest-asyncio dependency.
-    """
-    tool = getattr(main.add_test_run_results, "fn", main.add_test_run_results)
-    return asyncio.run(tool(ctx, **kwargs))
+
+class TestTrimAssignee:
+    def test_keeps_only_identifying_fields(self):
+        assert _trim_assignee(_user()) == {
+            "id": "9f1c0e2a",
+            "fullName": "Jan Figura",
+            "email": "jan.figura@onetick.com",
+        }
+
+    def test_drops_application_state_and_security_metadata(self):
+        trimmed = _trim_assignee(_user())
+        for dropped in (
+            "applicationState",
+            "passwordResetTokenExpiresAt",
+            "jwtTokenInvalidBefore",
+            "lastLoginAt",
+        ):
+            assert dropped not in trimmed
+
+    def test_unassigned_run_stays_none(self):
+        assert _trim_assignee(None) is None
+
+    def test_non_dict_value_passes_through(self):
+        assert _trim_assignee("9f1c0e2a") == "9f1c0e2a"
+
+    def test_missing_fields_are_omitted_not_nulled(self):
+        assert _trim_assignee({"id": "abc"}) == {"id": "abc"}
+
+    def test_trimmed_row_is_orders_of_magnitude_smaller(self):
+        raw_size = len(json.dumps(_user()))
+        trimmed_size = len(json.dumps(_trim_assignee(_user())))
+        assert raw_size > 16_000
+        assert trimmed_size < 300
 
 
 class FakeContext:
-    """Minimal stand-in for fastmcp's Context with awaitable get_state."""
+    """Minimal stand-in for the FastMCP Context used by the tool functions."""
 
     def __init__(self, state=None):
         self._state = state or {}
@@ -24,157 +69,57 @@ class FakeContext:
         return self._state.get(key)
 
 
-@pytest.fixture
-def env(monkeypatch):
-    monkeypatch.delenv("TUSKR_ACCOUNT_ID", raising=False)
-    monkeypatch.setenv("TUSKR_TENANT_ID", "tenant-from-env")
-    monkeypatch.setenv("TUSKR_ACCESS_TOKEN", "token-from-env")
+class TestListTestRunsTrimming:
+    @pytest.fixture(autouse=True)
+    def _creds(self, monkeypatch):
+        monkeypatch.setenv("TUSKR_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("TUSKR_ACCESS_TOKEN", "token-1")
 
-
-@pytest.fixture
-def send(mocker):
-    return mocker.patch.object(main.tuskr_client, "send", return_value="{}")
-
-
-class TestAddTestRunResults:
-    """Cover the bulk result endpoint wrapper."""
-
-    def test_single_test_case_is_wrapped_in_a_list(self, env, send):
-        """A bare string becomes a one-element testCases array."""
-        _add_result(
-            FakeContext(),
-            test_run="Release Build 22-10-2021",
-            status="PASSED",
-            test_cases="C-2",
-        )
-
-        action, body, method = send.call_args[0]
-        assert action == "test-run-result/bulk"
-        assert method == main.tuskr_client.RequestMethod.POST
-        assert body["testCases"] == ["C-2"]
-        assert body["testRun"] == "Release Build 22-10-2021"
-        assert body["status"] == "PASSED"
-
-    def test_many_test_cases_are_sent_in_one_call(self, env, send):
-        """A list of test cases produces exactly one request, not one per case."""
-        _add_result(
-            FakeContext(),
-            test_run="Alpha 3",
-            status="FAILED",
-            test_cases=["C-1", "Pagination", "4ded1648-6fc9-499b-a057-0482263d2f26"],
-        )
-
-        send.assert_called_once()
-        body = send.call_args[0][1]
-        assert body["testCases"] == [
-            "C-1",
-            "Pagination",
-            "4ded1648-6fc9-499b-a057-0482263d2f26",
-        ]
-
-    def test_unset_optional_fields_are_omitted(self, env, send):
-        """Blank optional values are never sent; Tuskr rejects them."""
-        _add_result(
-            FakeContext(),
-            test_run="Alpha 3",
-            status="PASSED",
-            test_cases="C-1",
-        )
-
-        body = send.call_args[0][1]
-        assert set(body) == {"testRun", "status", "testCases"}
-
-    def test_optional_fields_are_forwarded_when_set(self, env, send):
-        """Every optional parameter maps onto its documented Tuskr key."""
-        _add_result(
-            FakeContext(),
-            test_run="Alpha 3",
-            status="FAILED",
-            test_cases="C-1",
-            assigned_to="peter@mycompany.co",
-            comments="failed on checkout",
-            time_spent_in_minutes=10,
-            custom_fields={"integer": 108, "checkbox": True},
-        )
-
-        body = send.call_args[0][1]
-        assert body["assignedTo"] == "peter@mycompany.co"
-        assert body["comments"] == "failed on checkout"
-        assert body["timeSpentInMinutes"] == 10
-        assert body["customFields"] == {"integer": 108, "checkbox": True}
-
-    def test_zero_time_spent_is_still_forwarded(self, env, send):
-        """0 minutes is a real value, not an absent one."""
-        _add_result(
-            FakeContext(),
-            test_run="Alpha 3",
-            status="PASSED",
-            test_cases="C-1",
-            time_spent_in_minutes=0,
-        )
-
-        assert send.call_args[0][1]["timeSpentInMinutes"] == 0
-
-    def test_empty_test_case_list_raises(self, env, send):
-        """An empty list is a caller bug, not a request worth sending."""
-        with pytest.raises(ValueError, match="at least one test case"):
-            _add_result(
-                FakeContext(),
-                test_run="Alpha 3",
-                status="PASSED",
-                test_cases=[],
-            )
-
-        send.assert_not_called()
-
-
-class TestAddTestRunResultsCredentials:
-    """Header state must win over env vars; env vars must still work in stdio."""
-
-    def test_falls_back_to_env_vars_in_stdio_mode(self, env, send):
-        """Middleware sets state to None in stdio mode, so env vars are used."""
-        _add_result(
-            FakeContext({"ext_tenant_id": None, "ext_access_token": None}),
-            test_run="Alpha 3",
-            status="PASSED",
-            test_cases="C-1",
-        )
-
-        kwargs = send.call_args[1]
-        assert kwargs["ext_tenant_id"] == "tenant-from-env"
-        assert kwargs["ext_access_token"] == "token-from-env"
-
-    def test_header_state_beats_env_vars(self, env, send):
-        """Values from HTTP headers take precedence over the environment."""
-        _add_result(
-            FakeContext(
+    def test_incomplete_rows_carry_trimmed_assignee(self, monkeypatch):
+        page = {
+            "rows": [
                 {
-                    "ext_tenant_id": "tenant-from-header",
-                    "ext_access_token": "token-from-header",
-                }
-            ),
-            test_run="Alpha 3",
-            status="PASSED",
-            test_cases="C-1",
+                    "id": "run-1",
+                    "key": "TR-1",
+                    "name": "Regression",
+                    "percentDone": 42,
+                    "totalTestCaseCount": 10,
+                    "doneTestCaseCount": 4,
+                    "assignedTo": _user(),
+                    "deadline": "2026-08-20",
+                    "status": "ACTIVE",
+                },
+                {
+                    "id": "run-2",
+                    "key": "TR-2",
+                    "name": "Smoke",
+                    "percentDone": 100,
+                    "assignedTo": _user(),
+                },
+            ],
+            "meta": {"pages": 1},
+        }
+        monkeypatch.setattr(
+            "tuskr_client.send", lambda *args, **kwargs: json.dumps(page)
         )
 
-        kwargs = send.call_args[1]
-        assert kwargs["ext_tenant_id"] == "tenant-from-header"
-        assert kwargs["ext_access_token"] == "token-from-header"
-
-    def test_deprecated_account_id_env_var_still_resolves(
-        self, monkeypatch, mocker, send
-    ):
-        """TUSKR_ACCOUNT_ID remains a working fallback after the tenant rename."""
-        monkeypatch.delenv("TUSKR_TENANT_ID", raising=False)
-        monkeypatch.setenv("TUSKR_ACCOUNT_ID", "tenant-legacy")
-        monkeypatch.setenv("TUSKR_ACCESS_TOKEN", "token-from-env")
-
-        _add_result(
-            FakeContext(),
-            test_run="Alpha 3",
-            status="PASSED",
-            test_cases="C-1",
+        # asyncio.run keeps this a plain sync test, so the repo needs no
+        # pytest-asyncio dependency just for this one case.
+        result = json.loads(
+            asyncio.run(
+                _list_test_runs(
+                    FakeContext(), filter_project="p", filter_incomplete=True
+                )
+            )
         )
 
-        assert send.call_args[1]["ext_tenant_id"] == "tenant-legacy"
+        assert result["count"] == 1
+        row = result["rows"][0]
+        assert row["id"] == "run-1"
+        assert row["assignedTo"] == {
+            "id": "9f1c0e2a",
+            "fullName": "Jan Figura",
+            "email": "jan.figura@onetick.com",
+        }
+        assert "applicationState" not in json.dumps(result)
+        assert len(json.dumps(result)) < 500

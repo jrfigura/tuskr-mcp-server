@@ -13,6 +13,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Identifying fields kept from a Tuskr user object. The raw object also carries
+# an `applicationState` UI blob (menu state and cached announcement text, up to
+# ~16 KB per user) plus per-account security metadata such as
+# `passwordResetTokenExpiresAt`, `jwtTokenInvalidBefore` and `lastLoginAt`.
+# None of that is useful to a caller, and passing it through both defeats the
+# trimming and puts account metadata into model context.
+_ASSIGNEE_FIELDS = ("id", "fullName", "email")
+
+
+def _trim_assignee(assignee):
+    """Reduce a Tuskr user object to its identifying fields.
+
+    Returns the value unchanged when it is not a user object (e.g. None for an
+    unassigned test run), so the response shape stays stable for callers.
+    """
+    if not isinstance(assignee, dict):
+        return assignee
+    return {key: assignee[key] for key in _ASSIGNEE_FIELDS if key in assignee}
+
 
 class UserTokenHandler(Middleware):
     async def on_call_tool(self, context: MiddlewareContext, call_next):
@@ -148,8 +167,8 @@ async def list_test_runs(
         filter_status: to filter test runs by their status. Two supported values 'active' or 'archived'
         filter_assigned_to: id of the user to whom test runs are assigned
         filter_incomplete: if True, fetches all pages and returns only test runs that are not 100% complete,
-            with a trimmed payload (id, key, name, percentDone, counts, assignee, deadline, status).
-            When False (default), returns the raw paginated response from the Tuskr API.
+            with a trimmed payload (id, key, name, percentDone, counts, assignee as id/fullName/email,
+            deadline, status). When False (default), returns the raw paginated response from the Tuskr API.
         page: controls number of records in output, every page contains 100 records. Default is 1.
             Ignored when filter_incomplete is True.
     """
@@ -210,7 +229,7 @@ async def list_test_runs(
                         "percentDone": percent,
                         "totalTestCaseCount": run.get("totalTestCaseCount", 0),
                         "doneTestCaseCount": run.get("doneTestCaseCount", 0),
-                        "assignedTo": run.get("assignedTo"),
+                        "assignedTo": _trim_assignee(run.get("assignedTo")),
                         "deadline": run.get("deadline"),
                         "status": run.get("status"),
                     }

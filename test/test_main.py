@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from src.main import _trim_assignee, list_test_runs
+from src.main import _trim_assignee, _trim_test_run_rows, list_test_runs
 
 # Depending on the fastmcp version, @mcp.tool either leaves the plain function
 # in place or wraps it in a Tool object exposing the original as `.fn`.
@@ -57,6 +57,62 @@ class TestTrimAssignee:
         trimmed_size = len(json.dumps(_trim_assignee(_user())))
         assert raw_size > 16_000
         assert trimmed_size < 300
+
+
+class TestTrimTestRunRows:
+    def test_trims_assignee_on_every_row(self):
+        raw = json.dumps(
+            {
+                "rows": [
+                    {"id": "run-1", "assignedTo": _user()},
+                    {"id": "run-2", "assignedTo": _user(id="other")},
+                ],
+                "meta": {"pages": 1},
+            }
+        )
+        data = json.loads(_trim_test_run_rows(raw))
+        assert [row["assignedTo"]["id"] for row in data["rows"]] == [
+            "9f1c0e2a",
+            "other",
+        ]
+        assert "applicationState" not in _trim_test_run_rows(raw)
+
+    def test_leaves_every_other_field_untouched(self):
+        row = {
+            "id": "run-1",
+            "key": "TR-1",
+            "name": "Regression",
+            "description": "unchanged",
+            "customFields": {"a": 1},
+            "assignedTo": _user(),
+        }
+        data = json.loads(_trim_test_run_rows(json.dumps({"rows": [row]})))
+        trimmed = data["rows"][0]
+        assert {k: v for k, v in trimmed.items() if k != "assignedTo"} == {
+            k: v for k, v in row.items() if k != "assignedTo"
+        }
+
+    def test_meta_is_preserved(self):
+        raw = json.dumps({"rows": [], "meta": {"pages": 3, "total": 250}})
+        assert json.loads(_trim_test_run_rows(raw))["meta"] == {
+            "pages": 3,
+            "total": 250,
+        }
+
+    def test_unassigned_row_keeps_null_assignee(self):
+        raw = json.dumps({"rows": [{"id": "run-1", "assignedTo": None}]})
+        assert json.loads(_trim_test_run_rows(raw))["rows"][0]["assignedTo"] is None
+
+    def test_row_without_assignee_key_is_not_given_one(self):
+        raw = json.dumps({"rows": [{"id": "run-1"}]})
+        assert "assignedTo" not in json.loads(_trim_test_run_rows(raw))["rows"][0]
+
+    def test_error_body_passes_through_unchanged(self):
+        raw = json.dumps({"errors": [{"code": "NOT_FOUND"}]})
+        assert _trim_test_run_rows(raw) == raw
+
+    def test_non_json_passes_through_unchanged(self):
+        assert _trim_test_run_rows("502 Bad Gateway") == "502 Bad Gateway"
 
 
 class FakeContext:
@@ -123,3 +179,34 @@ class TestListTestRunsTrimming:
         }
         assert "applicationState" not in json.dumps(result)
         assert len(json.dumps(result)) < 500
+
+    def test_default_path_rows_carry_trimmed_assignee(self, monkeypatch):
+        page = {
+            "rows": [
+                {
+                    "id": "run-1",
+                    "key": "TR-1",
+                    "name": "Regression",
+                    "percentDone": 100,
+                    "assignedTo": _user(),
+                }
+            ],
+            "meta": {"pages": 1, "total": 1},
+        }
+        monkeypatch.setattr(
+            "tuskr_client.send", lambda *args, **kwargs: json.dumps(page)
+        )
+
+        raw = asyncio.run(_list_test_runs(FakeContext(), filter_project="p"))
+        result = json.loads(raw)
+
+        # Completed runs are still returned here, unlike the filter_incomplete
+        # path, and meta survives so pagination keeps working.
+        assert result["meta"] == {"pages": 1, "total": 1}
+        assert result["rows"][0]["assignedTo"] == {
+            "id": "9f1c0e2a",
+            "fullName": "Jan Figura",
+            "email": "jan.figura@onetick.com",
+        }
+        assert "applicationState" not in raw
+        assert "passwordResetTokenExpiresAt" not in raw

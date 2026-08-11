@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import warnings
@@ -31,6 +32,30 @@ def _trim_assignee(assignee):
     if not isinstance(assignee, dict):
         return assignee
     return {key: assignee[key] for key in _ASSIGNEE_FIELDS if key in assignee}
+
+
+def _trim_test_run_rows(raw):
+    """Trim the assignee on every row of a raw Tuskr test-run response.
+
+    Takes and returns the JSON text `tuskr_client.send` produces, so every
+    other field reaches the caller exactly as the API sent it. A payload that
+    is not a JSON object carrying a `rows` list is returned untouched, which
+    keeps error bodies and any future response shape readable rather than
+    silently emptied.
+    """
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+    if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+        return raw
+
+    for row in data["rows"]:
+        if isinstance(row, dict) and "assignedTo" in row:
+            row["assignedTo"] = _trim_assignee(row["assignedTo"])
+
+    return json.dumps(data)
 
 
 class UserTokenHandler(Middleware):
@@ -167,13 +192,12 @@ async def list_test_runs(
         filter_status: to filter test runs by their status. Two supported values 'active' or 'archived'
         filter_assigned_to: id of the user to whom test runs are assigned
         filter_incomplete: if True, fetches all pages and returns only test runs that are not 100% complete,
-            with a trimmed payload (id, key, name, percentDone, counts, assignee as id/fullName/email,
-            deadline, status). When False (default), returns the raw paginated response from the Tuskr API.
+            with a trimmed payload (id, key, name, percentDone, counts, assignee, deadline, status).
+            When False (default), returns the paginated response from the Tuskr API with every field
+            intact. Either way the assignee on each row is reduced to id, fullName and email.
         page: controls number of records in output, every page contains 100 records. Default is 1.
             Ignored when filter_incomplete is True.
     """
-    import json
-
     params = {"filter[project]": filter_project}
 
     if filter_name:
@@ -196,12 +220,17 @@ async def list_test_runs(
     )
 
     if not filter_incomplete:
-        return tuskr_client.send(
-            "test-run",
-            {"page": page, **params},
-            tuskr_client.RequestMethod.GET,
-            ext_tenant_id=tenant_id,
-            ext_access_token=access_token,
+        # Trim the assignee here too: this path returns whole rows, so without
+        # it the largest single source of bulk and the account security
+        # metadata both reach the caller on the default call.
+        return _trim_test_run_rows(
+            tuskr_client.send(
+                "test-run",
+                {"page": page, **params},
+                tuskr_client.RequestMethod.GET,
+                ext_tenant_id=tenant_id,
+                ext_access_token=access_token,
+            )
         )
 
     # Fetch all pages and filter for incomplete runs client-side,

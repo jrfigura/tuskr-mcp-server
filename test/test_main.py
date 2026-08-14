@@ -15,8 +15,8 @@ def _user(**overrides):
     """A Tuskr user object shaped like the real API response."""
     user = {
         "id": "9f1c0e2a",
-        "fullName": "Jan Figura",
-        "email": "jan.figura@onetick.com",
+        "fullName": "Test User",
+        "email": "qa.lead@example.com",
         "applicationState": "x" * 16209,
         "passwordResetTokenExpiresAt": "2026-08-01T10:00:00Z",
         "jwtTokenInvalidBefore": "2026-07-30T09:00:00Z",
@@ -61,8 +61,8 @@ class TestTrimAssignee:
     def test_keeps_only_identifying_fields(self):
         assert _trim_assignee(_user()) == {
             "id": "9f1c0e2a",
-            "fullName": "Jan Figura",
-            "email": "jan.figura@onetick.com",
+            "fullName": "Test User",
+            "email": "qa.lead@example.com",
         }
 
     def test_drops_application_state_and_security_metadata(self):
@@ -196,8 +196,8 @@ class TestListTestRunsTrimming:
         assert row["id"] == "run-1"
         assert row["assignedTo"] == {
             "id": "9f1c0e2a",
-            "fullName": "Jan Figura",
-            "email": "jan.figura@onetick.com",
+            "fullName": "Test User",
+            "email": "qa.lead@example.com",
         }
         assert "applicationState" not in json.dumps(result)
         assert len(json.dumps(result)) < 500
@@ -227,8 +227,8 @@ class TestListTestRunsTrimming:
         assert result["meta"] == {"pages": 1, "total": 1}
         assert result["rows"][0]["assignedTo"] == {
             "id": "9f1c0e2a",
-            "fullName": "Jan Figura",
-            "email": "jan.figura@onetick.com",
+            "fullName": "Test User",
+            "email": "qa.lead@example.com",
         }
         assert "applicationState" not in raw
         assert "passwordResetTokenExpiresAt" not in raw
@@ -378,7 +378,7 @@ class TestAddTestRunResultsCredentials:
         assert send.call_args[1]["ext_tenant_id"] == "tenant-legacy"
 
 
-# --- get_test_run_results (SQA-3427) -----------------------------------------
+# --- get_test_run_results -----------------------------------------------------
 # Everything below is specific to this tool. Kept in one appended block, after
 # the scaffolding shared with every other branch, so branches that add a tool
 # append here instead of colliding in the shared region above.
@@ -407,12 +407,12 @@ def _result_row(key="C-5", status="FAILED"):
                 f"2024-07-04T08:19:0{n}": {"runId": "old", "status": "FAILED"}
                 for n in range(9)
             },
-            "openIssueIds": [f"SOI-{n}" for n in range(400)],
+            "openIssueIds": [f"ISSUE-{n}" for n in range(400)],
             "testRunTestCases": [
                 {
                     "final": True,
                     "status": status,
-                    "issueIds": ["WELLS-712"],
+                    "issueIds": ["BUG-712"],
                     "testRunId": "run-1",
                     "assignedToId": None,
                 }
@@ -515,7 +515,7 @@ class TestGetTestRunResultsTrimming:
 
         row = json.loads(_get_results(FakeContext(), test_run="run-1"))["data"][0]
 
-        assert row["testCase"]["testRunTestCases"][0]["issueIds"] == ["WELLS-712"]
+        assert row["testCase"]["testRunTestCases"][0]["issueIds"] == ["BUG-712"]
         assert row["testCase"]["testRunTestCases"][0]["final"] is True
 
     def test_latest_status_survives_trimming(self, env, send):
@@ -614,3 +614,80 @@ class TestGetTestRunResultsPagination:
             _get_results(FakeContext(), test_run="run-1", fetch_all_pages=True)
             == "502 Bad Gateway"
         )
+
+
+# --- list_test_cases ----------------------------------------------------------
+# Everything below is specific to this tool. Kept in one appended block, after
+# the scaffolding shared with every other branch, so branches that add a tool
+# append here instead of colliding in the shared region above.
+
+
+def _list_cases(ctx, **kwargs):
+    """Call the list_test_cases tool, unwrapping the @mcp.tool decorator."""
+    tool = getattr(main.list_test_cases, "fn", main.list_test_cases)
+    return asyncio.run(tool(ctx, **kwargs))
+
+
+class TestListTestCases:
+    """Cover the test-case listing wrapper."""
+
+    def test_project_and_default_page_are_always_sent(self, env, send):
+        """A minimal call pins the project, asks for page 1, and sends nothing else."""
+        _list_cases(FakeContext(), filter_project="7")
+
+        action, params, method = send.call_args[0]
+        assert action == "test-case"
+        assert method == main.tuskr_client.RequestMethod.GET
+        # Exact equality is the point: an unset filter must not reach Tuskr as
+        # an empty query parameter.
+        assert params == {"page": 1, "filter[project]": "7"}
+
+    def test_page_is_forwarded(self, env, send):
+        """Pagination is caller-controlled; the default is not hardcoded."""
+        _list_cases(FakeContext(), filter_project="7", page=3)
+
+        assert send.call_args[0][1]["page"] == 3
+
+    def test_optional_filters_map_onto_tuskr_keys(self, env, send):
+        """Every snake_case parameter becomes its camelCase filter key."""
+        _list_cases(
+            FakeContext(),
+            filter_project="7",
+            filter_test_suite="TS-1",
+            filter_test_suite_section="Checkout",
+            filter_key="C-2",
+            filter_name="pagination",
+        )
+
+        params = send.call_args[0][1]
+        assert params["filter[testSuite]"] == "TS-1"
+        assert params["filter[testSuiteSection]"] == "Checkout"
+        assert params["filter[key]"] == "C-2"
+        assert params["filter[name]"] == "pagination"
+
+    def test_falls_back_to_env_vars_in_stdio_mode(self, env, send):
+        """Middleware sets state to None in stdio mode, so env vars are used."""
+        _list_cases(
+            FakeContext({"ext_tenant_id": None, "ext_access_token": None}),
+            filter_project="7",
+        )
+
+        kwargs = send.call_args[1]
+        assert kwargs["ext_tenant_id"] == "tenant-from-env"
+        assert kwargs["ext_access_token"] == "token-from-env"
+
+    def test_header_state_beats_env_vars(self, env, send):
+        """Values from HTTP headers take precedence over the environment."""
+        _list_cases(
+            FakeContext(
+                {
+                    "ext_tenant_id": "tenant-from-header",
+                    "ext_access_token": "token-from-header",
+                }
+            ),
+            filter_project="7",
+        )
+
+        kwargs = send.call_args[1]
+        assert kwargs["ext_tenant_id"] == "tenant-from-header"
+        assert kwargs["ext_access_token"] == "token-from-header"

@@ -15,6 +15,7 @@ async def list_test_cases(
     filter_test_suite_section: str | None = None,
     filter_key: str | None = None,
     filter_name: str | None = None,
+    filter_custom_fields: dict[str, str | int | float | bool | list[str]] | None = None,
     page: int = 1,
 ):
     """
@@ -29,16 +30,26 @@ async def list_test_cases(
         filter_test_suite_section: ID or name of the test suite section to filter the test cases by
         filter_key: to filter test cases with key containing the specified value
         filter_name: to filter test cases with name containing the specified value
+        filter_custom_fields: maps a custom field's key to the value to filter on,
+            e.g. {'priority_band': '<option-id>'}. The field key is whatever the
+            tenant named it, so any project's own field set can be filtered here.
+            Only fields applicable to test cases can be filtered; a field scoped
+            to test run results is not reachable through this endpoint.
+            Verified live by field type:
+              dropdown: pass the option's ID, not its displayed label. Read the
+                ID off any case that already has the field set, where it is
+                returned inline as customFields.<field>.id.
+              checkbox: pass a bool or the lowercase string 'true'/'false'. A
+                bool is normalised to the lowercase form Tuskr expects.
+              text: matches on substring, not equality.
+              steps: NOT filterable. Tuskr accepts the parameter and returns
+                every case in the project unfiltered.
+            Numbers and multi-select remain unverified.
+            Tuskr ignores a filter it does not understand instead of rejecting
+            it, so a filter that fails to narrow the results means the field
+            type or value shape is unsupported, not that nothing matched.
         page: controls number of records in output, every page contains 100 records. Default is 1.
     """
-    # No custom-field filter is exposed. Tuskr ignores a wrong-shaped one
-    # silently instead of rejecting it: filtering on a checkbox field returned
-    # every case in the project, including those where the field was false. A
-    # filter that quietly returns unfiltered rows is worse than no filter, so
-    # it is left out until the parameter shape is confirmed. Tuskr's support
-    # documents it as filter[customFields][<field>]=<optionId>, taking a
-    # dropdown option ID rather than a label, which needs verifying against a
-    # project that has a dropdown field before it can be offered here.
     params = {"filter[project]": filter_project}
 
     if filter_test_suite:
@@ -49,6 +60,24 @@ async def list_test_cases(
         params["filter[key]"] = filter_key
     if filter_name:
         params["filter[name]"] = filter_name
+
+    # Each custom field gets its own flattened bracket key. An earlier attempt
+    # sent the whole mapping as one JSON-encoded filter[customFields] value,
+    # which Tuskr ignored silently rather than rejecting, returning every case
+    # in the project as though no filter had been applied.
+    #
+    # Booleans are normalised to lowercase strings. Tuskr matches the literal
+    # text it receives for a checkbox field, and requests renders a Python bool
+    # via str(), producing 'True'. Live-verified: sending 'True' returned 1369
+    # of 1918 rows, most of them false, a plausible-looking but wrong result
+    # rather than an error or the unfiltered set. Sending 'true' returned
+    # exactly the 7 true rows out of a 38-row sample. The isinstance check has
+    # to precede any int handling because bool is a subclass of int.
+    if filter_custom_fields:
+        for field, value in filter_custom_fields.items():
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            params[f"filter[customFields][{field}]"] = value
 
     tenant_id, access_token = await credentials.resolve(ctx)
 

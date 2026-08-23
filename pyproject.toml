@@ -1,6 +1,6 @@
 [project]
 name = "tuskr-mcp-server"
-version = "0.1.3"
+version = "0.1.4"
 description = "Add your description here"
 authors = [
     { name = "Ruslan Galinskii", email = "galinskyifmo@gmail.com" }

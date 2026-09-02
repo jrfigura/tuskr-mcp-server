@@ -21,7 +21,7 @@ branch has to touch.
 
 import json
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastmcp import Context
 
@@ -34,7 +34,12 @@ from tuskr_mcp.server import mcp
 # assignee's UI state, none of which belongs in a timing summary.
 _RUN_FIELDS = ("id", "key", "name", "createdAt", "lockedAt", "status")
 
-_SECONDS_PER_DAY = 86400.0
+_SECONDS_PER_MINUTE = 60.0
+
+# Cap on any key list this tool returns. The tool exists to reduce an unbounded
+# payload to a handful of numbers, so a run that inherited thousands of
+# untouched cases must not turn its own summary into a dump.
+_MAX_LISTED_KEYS = 50
 
 
 def parse_timestamp(value):
@@ -45,45 +50,68 @@ def parse_timestamp(value):
     `2026-01-22T10:33:07`. Both denote UTC, so the marker is stripped and every
     value compared naive. Mixing the two forms raises TypeError at subtraction
     time, which is why this is normalised in one place.
+
+    An explicit offset (`+02:00`) is handled too, by converting to UTC and
+    dropping the tzinfo. Nothing observed emits one today, but returning an
+    aware value here would raise TypeError on the first subtraction against a
+    bare resultHistory key.
     """
     if not isinstance(value, str) or not value:
         return None
-    text = value.rstrip("Z")
+    text = value.removesuffix("Z")
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
 
 
-def span_days(start, end):
-    """Whole-day difference between two datetimes, to two decimals.
+def span_minutes(start, end):
+    """Minutes between two datetimes, to one decimal.
+
+    Minutes rather than days: the question this tool answers is usually whether
+    a run was executed in a single afternoon or spread across a week, and a
+    two-decimal fraction of a day gives 14-minute granularity, rounding that
+    afternoon down to a meaningless 0.15. Minutes also match the unit Tuskr's
+    own run-details endpoint reports, so the two stay directly comparable.
 
     Returns None when either end is missing, so an absent value stays absent
     rather than becoming a misleading zero.
     """
     if start is None or end is None:
         return None
-    return round((end - start).total_seconds() / _SECONDS_PER_DAY, 2)
+    return round((end - start).total_seconds() / _SECONDS_PER_MINUTE, 1)
 
 
 def executions_for_run(test_case, test_run_id):
     """Timestamps from one case's resultHistory that belong to this run.
 
-    Returns naive datetimes. Entries whose key does not parse are dropped: a
-    malformed key would otherwise poison the min and max for the whole run.
+    Returns `(stamps, run_ids_seen)`: naive datetimes recorded against this run,
+    and every runId the case's history mentions. The second element exists so
+    the caller can tell "this run was never executed" apart from "the
+    identifier passed in is not the one the history references".
+
+    Entries whose key does not parse are dropped: a malformed key would
+    otherwise poison the min and max for the whole run.
     """
     history = test_case.get("resultHistory")
     if not isinstance(history, dict):
-        return []
+        return [], set()
 
     stamps = []
+    run_ids = set()
     for raw_stamp, entry in history.items():
-        if not isinstance(entry, dict) or entry.get("runId") != test_run_id:
+        if not isinstance(entry, dict):
+            continue
+        run_ids.add(entry.get("runId"))
+        if entry.get("runId") != test_run_id:
             continue
         parsed = parse_timestamp(raw_stamp)
         if parsed is not None:
             stamps.append(parsed)
-    return stamps
+    return stamps, run_ids
 
 
 def summarise_executions(rows, test_run_id, include_daily_breakdown):
@@ -92,12 +120,17 @@ def summarise_executions(rows, test_run_id, include_daily_breakdown):
     `casesNeverExecuted` counts cases attached to the run that carry no history
     entry for it. Those are the cases a run inherited but nobody touched, and
     they are the reason a nominally complete run can still hide untested scope.
+
+    When nothing matched but the histories do reference other runs, the summary
+    carries `runIdMismatch` rather than a clean set of zeros. A zeroed summary
+    reads as "nobody tested this run", which is a believable wrong answer; the
+    likelier cause is an identifier the results endpoint accepted but the
+    history does not compare equal to.
     """
     all_stamps = []
     cases_executed = 0
-    cases_never_executed = 0
-    executed_keys = []
     never_executed_keys = []
+    run_ids_seen = set()
 
     for row in rows:
         if not isinstance(row, dict):
@@ -106,29 +139,38 @@ def summarise_executions(rows, test_run_id, include_daily_breakdown):
         if not isinstance(test_case, dict):
             continue
 
-        key = test_case.get("key")
-        stamps = executions_for_run(test_case, test_run_id)
+        stamps, run_ids = executions_for_run(test_case, test_run_id)
+        run_ids_seen |= run_ids
         if stamps:
             cases_executed += 1
-            executed_keys.append(key)
             all_stamps.extend(stamps)
         else:
-            cases_never_executed += 1
-            never_executed_keys.append(key)
+            never_executed_keys.append(test_case.get("key"))
 
+    listed_keys = sorted(k for k in never_executed_keys if k)
     summary = {
-        "casesInRun": cases_executed + cases_never_executed,
+        "casesInRun": cases_executed + len(never_executed_keys),
         "casesExecuted": cases_executed,
-        "casesNeverExecuted": cases_never_executed,
-        "neverExecutedKeys": sorted(k for k in never_executed_keys if k),
+        "casesNeverExecuted": len(never_executed_keys),
+        "neverExecutedKeys": listed_keys[:_MAX_LISTED_KEYS],
         "totalExecutionEvents": len(all_stamps),
         "firstExecutedAt": None,
         "lastExecutedAt": None,
-        "executionSpanDays": None,
+        "executionSpanMinutes": None,
         "distinctExecutionDays": 0,
     }
+    if len(listed_keys) > _MAX_LISTED_KEYS:
+        summary["neverExecutedKeysTruncated"] = True
 
     if not all_stamps:
+        other_ids = sorted(
+            str(run_id) for run_id in run_ids_seen if run_id and run_id != test_run_id
+        )
+        if other_ids:
+            summary["runIdMismatch"] = {
+                "requested": test_run_id,
+                "runIdsInHistory": other_ids[:_MAX_LISTED_KEYS],
+            }
         return summary, None, None
 
     first = min(all_stamps)
@@ -137,7 +179,7 @@ def summarise_executions(rows, test_run_id, include_daily_breakdown):
 
     summary["firstExecutedAt"] = first.isoformat()
     summary["lastExecutedAt"] = last.isoformat()
-    summary["executionSpanDays"] = span_days(first, last)
+    summary["executionSpanMinutes"] = span_minutes(first, last)
     summary["distinctExecutionDays"] = len(days)
 
     if include_daily_breakdown:
@@ -201,13 +243,23 @@ async def get_test_run_timeline(
         include_daily_breakdown: if True (default), adds executionsByDay, a map
             of date to execution count. Useful for telling a run worked steadily
             over a week from one tested in an afternoon after sitting idle. Its
-            size is bounded by the run's span, so it stays small.
+            size is bounded by the run's span, so it stays small. Days are
+            bucketed by UTC date, so an evening session in a UTC+2 or later
+            timezone can straddle two buckets and read as two days of activity.
 
     Returns a JSON object with firstExecutedAt, lastExecutedAt,
-    executionSpanDays, distinctExecutionDays, totalExecutionEvents, the case
-    counts including casesNeverExecuted and their keys, and, when the run object
-    is retrievable, its createdAt and lockedAt alongside createdToFirstExecution
-    and lastExecutionToLocked so the old and new measures can be compared.
+    executionSpanMinutes, distinctExecutionDays, totalExecutionEvents, and the
+    case counts including casesNeverExecuted with up to 50 of their keys
+    (neverExecutedKeysTruncated is set when the list was cut). When the run
+    object is retrievable it also carries createdAt, lockedAt,
+    createdToLockedMinutes, createdToFirstExecutionMinutes and
+    lastExecutionToLockedMinutes, so the administrative and real durations can
+    be compared; runMetadataAvailable says whether those are present.
+
+    If no history entry references this run but the cases do carry entries for
+    other runs, runIdMismatch is returned instead of a zeroed summary: that
+    means the identifier is not the one the history records, not that the run
+    went untested.
     """
     tenant_id, access_token = await credentials.resolve(ctx)
 
@@ -239,7 +291,9 @@ async def get_test_run_timeline(
         rows.extend(more.get("data", []))
 
     summary, first, last = summarise_executions(
-        rows, test_run, include_daily_breakdown
+        rows,
+        test_run,
+        include_daily_breakdown,
     )
 
     result = {"testRunId": test_run, **summary}
@@ -258,8 +312,8 @@ async def get_test_run_timeline(
     result["status"] = run.get("status")
     result["createdAt"] = run.get("createdAt")
     result["lockedAt"] = run.get("lockedAt")
-    result["createdToLockedDays"] = span_days(created, locked)
-    result["createdToFirstExecutionDays"] = span_days(created, first)
-    result["lastExecutionToLockedDays"] = span_days(last, locked)
+    result["createdToLockedMinutes"] = span_minutes(created, locked)
+    result["createdToFirstExecutionMinutes"] = span_minutes(created, first)
+    result["lastExecutionToLockedMinutes"] = span_minutes(last, locked)
 
     return json.dumps(result)

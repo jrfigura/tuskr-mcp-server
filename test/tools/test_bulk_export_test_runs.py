@@ -223,7 +223,9 @@ class TestBulkExportTrimming:
         raw = _body([_run([_case()])])
         send.return_value = raw
 
-        assert _export(FakeContext(), filter_project="proj-1", trim_response=False) == raw
+        assert (
+            _export(FakeContext(), filter_project="proj-1", trim_response=False) == raw
+        )
 
     def test_rows_without_test_cases_are_untouched(self, env, send):
         send.return_value = _body([_run()])

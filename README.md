@@ -17,6 +17,7 @@ Every tool wraps a single Tuskr REST endpoint, relative to
 | `list_test_runs` | `GET` | `test-run` | Lists a project's test runs, filterable by name, key, status and assignee. `filter_incomplete=True` walks every page and returns only runs below 100% done. |
 | `create_test_run` | `POST` | `test-run` | Creates a test run containing all cases in the project or a named subset. |
 | `copy_test_run` | `POST` | `test-run/copy` | Copies an existing run and its case selection within the same project. Results are not carried over; every case starts untested. |
+| `upsert_test_case` | `POST` | `test-case/upsert` | Creates a test case, or updates an existing one by ID or external ID. It can modify existing cases, and only the fields you pass are changed. Custom-field keys and value shapes are tenant specific. The API has no delete endpoint for test cases, so try it on a sandbox project. |
 | `add_test_run_results` | `POST` | `test-run-result/bulk` | Records one status against one or many cases in a run. Prefer a single call with a list of cases over repeated single calls. |
 | `get_test_run_results` | `GET` | `test-run/<id>/results` | Fetches the cases in a run with their latest result, filterable by status. Pass `status='FAILED'` for a confirmation-test worklist. |
 | `set_test_run_lock` | `POST` | `test-run/set-lock` | Locks a run read-only, or unlocks it. One run per call. |
